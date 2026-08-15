@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 
 import os
+import socket
+import subprocess
+import urllib.request
+import urllib.error
 
 
 # ==========================================
-# NEXUS V3
+# NEXUS V4
 # AI SECURITY AGENT
 # ==========================================
 
@@ -13,13 +17,17 @@ def clear_screen():
     os.system("clear")
 
 
+def pause():
+    input("\nPress Enter to continue...")
+
+
 def banner():
     clear_screen()
 
     print(r"""
 ╔══════════════════════════════════════╗
 ║                NEXUS                 ║
-║          AI SECURITY AGENT   V3      ║
+║       AI SECURITY RESEARCH AGENT     ║
 ╠══════════════════════════════════════╣
 ║                                      ║
 ║   [1] PENTEST                        ║
@@ -35,8 +43,52 @@ def banner():
 
 
 # ==========================================
+# AUTHORIZATION
+# ==========================================
+
+
+def confirm_authorization(target):
+
+    print("\n════════ AUTHORIZATION CHECK ════════")
+    print(f"Target: {target}")
+    print("\nOnly continue if you have explicit permission")
+    print("or the target is within an authorized CTF/bug")
+    print("bounty scope.")
+
+    answer = input(
+        "\nDo you confirm you are authorized? [yes/no]: "
+    ).strip().lower()
+
+    return answer == "yes"
+
+
+# ==========================================
 # CTF MODE
 # ==========================================
+
+
+def identify_file(path):
+
+    print("\n════════ FILE IDENTIFICATION ════════")
+
+    try:
+        result = subprocess.run(
+            ["file", "-b", path],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+
+        if result.returncode == 0:
+            print(f"[+] File type: {result.stdout.strip()}")
+        else:
+            print("[-] Could not identify file type.")
+
+    except FileNotFoundError:
+        print("[-] The 'file' utility is not installed.")
+
+    except subprocess.TimeoutExpired:
+        print("[-] File identification timed out.")
 
 
 def analyze_file(path):
@@ -57,24 +109,20 @@ def analyze_file(path):
     else:
         print("[+] Extension: None detected")
 
+    identify_file(path)
+
 
 def analyze_folder(path):
 
     print("\n═════════ FOLDER ANALYSIS ═════════")
 
-    print(f"[+] Path: {os.path.abspath(path)}")
-
     try:
+        items = os.listdir(path)
 
-        files = os.listdir(path)
+        print(f"[+] Path: {os.path.abspath(path)}")
+        print(f"[+] Found {len(items)} item(s):\n")
 
-        if not files:
-            print("[-] Folder is empty.")
-            return
-
-        print(f"\n[+] Found {len(files)} item(s):\n")
-
-        for item in files:
+        for item in items:
 
             item_path = os.path.join(path, item)
 
@@ -91,42 +139,36 @@ def analyze_folder(path):
 
 def ctf_file():
 
-    challenge = input(
-        "\nEnter challenge file path: "
-    ).strip()
+    path = input("\nEnter challenge file path: ").strip()
 
-    if not os.path.isfile(challenge):
+    if not os.path.isfile(path):
         print("\n[-] File not found.")
         return
 
-    analyze_file(challenge)
+    analyze_file(path)
 
 
 def ctf_folder():
 
-    challenge = input(
-        "\nEnter challenge folder path: "
-    ).strip()
+    path = input("\nEnter challenge folder path: ").strip()
 
-    if not os.path.isdir(challenge):
+    if not os.path.isdir(path):
         print("\n[-] Folder not found.")
         return
 
-    analyze_folder(challenge)
+    analyze_folder(path)
 
 
 def ctf_url():
 
-    url = input(
-        "\nEnter challenge URL: "
-    ).strip()
+    url = input("\nEnter challenge URL: ").strip()
 
     if not url:
         print("\n[-] No URL entered.")
         return
 
-    print(f"\n[*] Challenge URL loaded: {url}")
-    print("[*] URL analysis will be added in a future version.")
+    print(f"\n[+] Challenge URL: {url}")
+    print("[*] URL-specific CTF analysis is planned for V5.")
 
 
 def ctf_description():
@@ -142,8 +184,6 @@ def ctf_description():
     print("\n════════ CHALLENGE DESCRIPTION ════════")
     print(description)
 
-    print("\n[*] AI challenge reasoning will be added later.")
-
 
 def ctf_mode():
 
@@ -153,14 +193,12 @@ def ctf_mode():
 ╔══════════════════════════════════════╗
 ║               CTF MODE               ║
 ╠══════════════════════════════════════╣
-║                                      ║
 ║   [1] Challenge File                 ║
 ║   [2] Challenge Folder               ║
 ║   [3] Challenge URL                  ║
 ║   [4] Challenge Description / Text   ║
 ║                                      ║
 ║   [B] Back                           ║
-║                                      ║
 ╚══════════════════════════════════════╝
 """)
 
@@ -186,15 +224,153 @@ def ctf_mode():
         else:
             print("\n[-] Invalid option.")
 
-        input("\nPress Enter to continue...")
+        pause()
 
 
 # ==========================================
-# PENTEST MODE
+# PENTEST: TARGET INFORMATION
+# ==========================================
+
+
+def target_information(target):
+
+    print("\n════════ TARGET INFORMATION ════════")
+
+    try:
+        ip = socket.gethostbyname(target)
+
+        print(f"[+] Target: {target}")
+        print(f"[+] Resolved IP: {ip}")
+
+    except socket.gaierror:
+        print("[-] Could not resolve target.")
+
+
+# ==========================================
+# PENTEST: SERVICE INVENTORY
+# ==========================================
+
+
+def service_inventory(target):
+
+    print("\n════════ SERVICE INVENTORY ════════")
+    print("[*] Checking a small predefined set of ports...")
+    print("[*] This may take a moment.\n")
+
+    ports = {
+        80: "HTTP",
+        443: "HTTPS",
+        22: "SSH",
+        21: "FTP",
+        25: "SMTP",
+        53: "DNS",
+        8080: "HTTP Alternate"
+    }
+
+    try:
+        ip = socket.gethostbyname(target)
+
+    except socket.gaierror:
+        print("[-] Could not resolve target.")
+        return
+
+    open_services = []
+
+    for port, name in ports.items():
+
+        sock = socket.socket(
+            socket.AF_INET,
+            socket.SOCK_STREAM
+        )
+
+        sock.settimeout(1)
+
+        result = sock.connect_ex((ip, port))
+
+        if result == 0:
+            print(
+                f"[+] OPEN  {port}/tcp - {name}"
+            )
+
+            open_services.append(port)
+
+        sock.close()
+
+    if not open_services:
+        print("[-] No services found in this limited check.")
+
+
+# ==========================================
+# PENTEST: SECURITY HEADERS
+# ==========================================
+
+
+def security_headers(target):
+
+    print("\n════════ SECURITY HEADER REVIEW ════════")
+
+    if not target.startswith("http://") and \
+       not target.startswith("https://"):
+
+        target = "https://" + target
+
+    expected_headers = [
+        "Content-Security-Policy",
+        "Strict-Transport-Security",
+        "X-Content-Type-Options",
+        "X-Frame-Options",
+        "Referrer-Policy",
+        "Permissions-Policy"
+    ]
+
+    try:
+
+        request = urllib.request.Request(
+            target,
+            method="HEAD",
+            headers={
+                "User-Agent": "NEXUS-Security-Research"
+            }
+        )
+
+        with urllib.request.urlopen(
+            request,
+            timeout=10
+        ) as response:
+
+            headers = response.headers
+
+            print(
+                f"[+] Response status: "
+                f"{response.status}\n"
+            )
+
+            for header in expected_headers:
+
+                if header in headers:
+                    print(
+                        f"[+] PRESENT: {header}"
+                    )
+
+                else:
+                    print(
+                        f"[-] NOT FOUND: {header}"
+                    )
+
+    except urllib.error.URLError as error:
+        print(f"[-] Request failed: {error}")
+
+
+# ==========================================
+# PENTEST OPTIONS
 # ==========================================
 
 
 def pentest_options(target):
+
+    if not confirm_authorization(target):
+        print("\n[-] Authorization not confirmed.")
+        return
 
     while True:
 
@@ -202,17 +378,15 @@ def pentest_options(target):
 ╔══════════════════════════════════════╗
 ║           PENTEST OPTIONS            ║
 ╠══════════════════════════════════════╣
-║                                      ║
 ║   [1] Target Information             ║
 ║   [2] Service Inventory              ║
 ║   [3] Web Application Mapping        ║
 ║   [4] Security Header Review         ║
 ║   [5] TLS Configuration Review       ║
 ║   [6] Potential Finding Review       ║
-║   [7] Full Authorized Assessment     ║
+║   [7] Full Assessment                ║
 ║                                      ║
 ║   [B] Back                           ║
-║                                      ║
 ╚══════════════════════════════════════╝
 """)
 
@@ -220,41 +394,54 @@ def pentest_options(target):
             "Select option [1-7/B]: "
         ).strip().lower()
 
-        if choice == "b":
+        if choice == "1":
+            target_information(target)
+
+        elif choice == "2":
+            service_inventory(target)
+
+        elif choice == "3":
+            print(
+                "\n[*] Web mapping planned for a later version."
+            )
+
+        elif choice == "4":
+            security_headers(target)
+
+        elif choice == "5":
+            print(
+                "\n[*] TLS review planned for a later version."
+            )
+
+        elif choice == "6":
+            print(
+                "\n[*] Finding review planned for a later version."
+            )
+
+        elif choice == "7":
+
+            print("\n════════ FULL ASSESSMENT ════════")
+
+            target_information(target)
+            service_inventory(target)
+
+            print(
+                "\n[*] Running security header review..."
+            )
+
+            security_headers(target)
+
+            print(
+                "\n[+] Limited authorized assessment complete."
+            )
+
+        elif choice == "b":
             break
-
-        elif choice in [
-            "1", "2", "3", "4",
-            "5", "6", "7"
-        ]:
-
-            options = {
-                "1": "Target Information",
-                "2": "Service Inventory",
-                "3": "Web Application Mapping",
-                "4": "Security Header Review",
-                "5": "TLS Configuration Review",
-                "6": "Potential Finding Review",
-                "7": "Full Authorized Assessment"
-            }
-
-            print(
-                f"\n[*] Selected: {options[choice]}"
-            )
-
-            print(
-                f"[*] Target: {target}"
-            )
-
-            print(
-                "[*] This assessment module "
-                "will be implemented in a future version."
-            )
 
         else:
             print("\n[-] Invalid option.")
 
-        input("\nPress Enter to continue...")
+        pause()
 
 
 def pentest_mode():
@@ -265,24 +452,18 @@ def pentest_mode():
 ╔══════════════════════════════════════╗
 ║             PENTEST MODE             ║
 ╠══════════════════════════════════════╣
-║                                      ║
 ║   [1] Website / Domain               ║
 ║   [2] IP Address                     ║
-║   [3] Import Scope Configuration     ║
 ║                                      ║
 ║   [B] Back                           ║
-║                                      ║
 ╚══════════════════════════════════════╝
 """)
 
         choice = input(
-            "Select option [1-3/B]: "
+            "Select option [1/2/B]: "
         ).strip().lower()
 
-        if choice == "b":
-            break
-
-        elif choice == "1":
+        if choice == "1":
 
             target = input(
                 "\nEnter authorized website/domain: "
@@ -290,9 +471,6 @@ def pentest_mode():
 
             if target:
                 pentest_options(target)
-
-            else:
-                print("\n[-] No target entered.")
 
         elif choice == "2":
 
@@ -303,34 +481,13 @@ def pentest_mode():
             if target:
                 pentest_options(target)
 
-            else:
-                print("\n[-] No IP entered.")
-
-        elif choice == "3":
-
-            scope_file = input(
-                "\nEnter scope configuration path: "
-            ).strip()
-
-            if os.path.isfile(scope_file):
-
-                print(
-                    f"\n[+] Scope file found: "
-                    f"{scope_file}"
-                )
-
-                print(
-                    "[*] Scope parsing will be "
-                    "added in a future version."
-                )
-
-            else:
-                print("\n[-] Scope file not found.")
+        elif choice == "b":
+            break
 
         else:
             print("\n[-] Invalid option.")
 
-        input("\nPress Enter to continue...")
+        pause()
 
 
 # ==========================================
@@ -355,14 +512,13 @@ def main():
             ctf_mode()
 
         elif choice == "q":
-
             print("\n[+] Exiting NEXUS.")
             break
 
         else:
             print("\n[-] Invalid option.")
 
-        input("\nPress Enter to return to main menu...")
+        pause()
 
 
 if __name__ == "__main__":
