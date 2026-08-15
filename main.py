@@ -206,6 +206,23 @@ class CTFAnalysisResult:
     clues: List[str] = field(default_factory=list)
     recommended_steps: List[str] = field(default_factory=list)
 
+@dataclass
+class CTFURLArtifact:
+    original_url: str
+    final_url: str = ""
+    hostname: str = ""
+    status_code: Optional[int] = None
+    headers: Dict[str, str] = field(default_factory=dict)
+    title: Optional[str] = None
+    response_size: int = 0
+    links: List[str] = field(default_factory=list)
+    forms: List[Dict[str, Any]] = field(default_factory=list)
+    comments: List[str] = field(default_factory=list)
+    cookies: List[str] = field(default_factory=list)
+    observations: List[str] = field(default_factory=list)
+    errors: List[str] = field(default_factory=list)
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
 
 # ============================================================
 # REPORTS DIRECTORY
@@ -844,12 +861,57 @@ class PentestAssessmentEngine:
 
 LAB_ALLOWED_HOSTS = ("localhost", "127.0.0.1", "::1")
 
+class CTFURLParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.links: List[str] = []
+        self.forms: List[Dict[str, Any]] = []
+        self.comments: List[str] = []
+        self.title: Optional[str] = None
+        self._in_title = False
+        self._current_form: Optional[Dict[str, Any]] = None
+
+    def handle_starttag(self, tag, attrs):
+        attrs_d = dict(attrs)
+        if tag == "a" and attrs_d.get("href"):
+            self.links.append(attrs_d["href"])
+        elif tag == "form":
+            self._current_form = {
+                "method": (attrs_d.get("method") or "GET").upper(),
+                "action": attrs_d.get("action") or "",
+                "inputs": [],
+            }
+        elif tag in ("input", "textarea", "select") and self._current_form is not None:
+            self._current_form["inputs"].append({
+                "name": attrs_d.get("name") or "",
+                "type": attrs_d.get("type") or tag,
+            })
+        elif tag == "title":
+            self._in_title = True
+
+    def handle_endtag(self, tag):
+        if tag == "form" and self._current_form is not None:
+            self.forms.append(self._current_form)
+            self._current_form = None
+        elif tag == "title":
+            self._in_title = False
+
+    def handle_data(self, data):
+        if self._in_title:
+            self.title = (self.title or "") + data
+
+    def handle_comment(self, data):
+        cleaned = data.strip()
+        if cleaned:
+            self.comments.append(cleaned)
+
 class LabCTFEngine:
     def __init__(self):
         self.artifacts: List[CTFArtifact] = []
         self.analysis: Optional[CTFAnalysisResult] = None
         self.description_text: str = ""
         self.lab_mode_confirmed = False
+        self.url_artifact: Optional[CTFURLArtifact] = None
 
     # ---------- target validation ----------
 
@@ -1119,12 +1181,193 @@ class LabCTFEngine:
         status("INFO", "No flag is fabricated or guessed by NEXUS.")
         return result
 
+    # ---------- 4. Analyze CTF URL ----------
+
+    @staticmethod
+    def _normalize_ctf_url(raw: str) -> Optional[str]:
+        raw = raw.strip()
+        if not raw:
+            return None
+        if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", raw):
+            raw = "http://" + raw
+        parsed = urllib.parse.urlparse(raw)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            return None
+        return raw
+
+    def analyze_ctf_url(self, raw_url: str, max_links: int = 25) -> Optional[CTFURLArtifact]:
+        section("ANALYZE CTF URL")
+        url = self._normalize_ctf_url(raw_url)
+        if not url:
+            status("ERROR", "Invalid URL. Use http:// or https:// with a hostname.")
+            return None
+
+        parsed = urllib.parse.urlparse(url)
+        host = parsed.hostname or ""
+        if not self.is_lab_target(host):
+            if not self.confirm_lab_mode(url):
+                status("INFO", "LAB MODE not confirmed. URL analysis cancelled.")
+                return None
+        else:
+            status("OK", "Local lab target detected.")
+
+        artifact = CTFURLArtifact(original_url=url, hostname=host)
+        section("CTF URL ANALYSIS")
+        status("INFO", f"Original URL: {url}")
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={"User-Agent": "NEXUS-CTF-Lab/1.0", "Accept": "text/html,*/*;q=0.8"},
+                method="GET",
+            )
+            try:
+                response = urllib.request.urlopen(req, timeout=8)
+            except urllib.error.HTTPError as e:
+                response = e
+
+            with response as resp:
+                artifact.final_url = resp.geturl()
+                artifact.status_code = getattr(resp, "status", None) or getattr(resp, "code", None)
+                artifact.headers = dict(resp.headers.items()) if resp.headers else {}
+                raw = resp.read(500_000)
+                artifact.response_size = len(raw)
+                charset = "utf-8"
+                try:
+                    charset = resp.headers.get_content_charset() or "utf-8"
+                except Exception:
+                    pass
+                html = raw.decode(charset, errors="ignore")
+
+            status("OK", f"Final URL: {artifact.final_url}")
+            status("OK", f"HTTP status: {artifact.status_code}")
+            status("OK", f"Response size: {artifact.response_size} bytes")
+
+            parser = CTFURLParser()
+            try:
+                parser.feed(html)
+                parser.close()
+            except Exception as e:
+                artifact.errors.append(f"HTML parsing failed: {e}")
+                status("OBSERVATION", f"HTML parsing issue: {e}")
+
+            artifact.title = parser.title.strip() if parser.title else None
+            if artifact.title:
+                status("OK", f"Title: {artifact.title}")
+
+            final_parsed = urllib.parse.urlparse(artifact.final_url or url)
+            same_origin = f"{final_parsed.scheme}://{final_parsed.netloc}"
+            seen = set()
+            for link in parser.links:
+                absolute = urllib.parse.urljoin(artifact.final_url or url, link)
+                lp = urllib.parse.urlparse(absolute)
+                if lp.scheme not in ("http", "https") or lp.netloc != final_parsed.netloc:
+                    continue
+                clean = lp._replace(fragment="").geturl()
+                if clean not in seen:
+                    seen.add(clean)
+                    artifact.links.append(clean)
+                if len(artifact.links) >= max_links:
+                    break
+
+            artifact.forms = parser.forms
+            artifact.comments = parser.comments[:10]
+            artifact.cookies = [v for k, v in artifact.headers.items() if k.lower() == "set-cookie"]
+
+            server = next((v for k, v in artifact.headers.items() if k.lower() == "server"), None)
+            powered = next((v for k, v in artifact.headers.items() if k.lower() == "x-powered-by"), None)
+            if server:
+                artifact.observations.append(f"Server header observed: {server}")
+            if powered:
+                artifact.observations.append(f"X-Powered-By observed: {powered}")
+            if artifact.comments:
+                artifact.observations.append(f"{len(artifact.comments)} HTML comment(s) discovered")
+            if artifact.forms:
+                artifact.observations.append(f"{len(artifact.forms)} form(s) discovered without submission")
+
+            print()
+            print("DISCOVERED LINKS")
+            hr()
+            if artifact.links:
+                for i, link in enumerate(artifact.links, 1):
+                    print(f"[{i}] {link}")
+            else:
+                status("INFO", "No same-origin links discovered.")
+
+            print()
+            print("FORMS")
+            hr()
+            if artifact.forms:
+                for i, form in enumerate(artifact.forms, 1):
+                    print(f"Form {i}")
+                    print(f"  Method: {form['method']}")
+                    print(f"  Action: {urllib.parse.urljoin(artifact.final_url or url, form['action']) if form['action'] else artifact.final_url or url}")
+                    if form["inputs"]:
+                        print("  Inputs:")
+                        for inp in form["inputs"][:30]:
+                            print(f"    {inp['name'] or '(unnamed)'} [{inp['type']}]")
+                    else:
+                        print("  Inputs: none detected")
+            else:
+                status("INFO", "No forms discovered.")
+
+            print()
+            print("CLUES / COMMENTS")
+            hr()
+            if artifact.comments:
+                for i, comment in enumerate(artifact.comments, 1):
+                    preview = comment[:300] + ("..." if len(comment) > 300 else "")
+                    print(f"[{i}] {preview}")
+            else:
+                status("INFO", "No HTML comments discovered.")
+
+            # Conservative optional resource checks: two standard CTF/web resources only.
+            for resource in ("robots.txt", "favicon.ico"):
+                candidate = urllib.parse.urljoin(same_origin + "/", resource)
+                try:
+                    r = urllib.request.Request(candidate, headers={"User-Agent": "NEXUS-CTF-Lab/1.0"}, method="GET")
+                    with urllib.request.urlopen(r, timeout=5) as resp:
+                        code = resp.status
+                        if code < 400:
+                            artifact.observations.append(f"Resource available: {candidate} ({code})")
+                            status("OBSERVATION", f"Available: {candidate} [{code}]")
+                except urllib.error.HTTPError:
+                    pass
+                except Exception as e:
+                    artifact.errors.append(f"{resource} check: {e}")
+
+            print()
+            print("OBSERVATIONS")
+            hr()
+            if artifact.observations:
+                for item in artifact.observations:
+                    status("OBSERVATION", item)
+            else:
+                status("INFO", "No additional observations.")
+
+            self.url_artifact = artifact
+            return artifact
+
+        except urllib.error.URLError as e:
+            artifact.errors.append(f"Connection failed: {e.reason}")
+            status("ERROR", f"Connection failed: {e.reason}")
+        except socket.timeout:
+            artifact.errors.append("Request timed out")
+            status("ERROR", "Request timed out.")
+        except ssl.SSLError as e:
+            artifact.errors.append(f"TLS error: {e}")
+            status("ERROR", f"TLS error: {e}")
+        except Exception as e:
+            artifact.errors.append(str(e))
+            status("ERROR", f"URL analysis failed: {e}")
+        self.url_artifact = artifact
+        return None
+
     # ---------- 4. Analysis Plan ----------
 
     def analysis_plan(self):
         section("ANALYSIS PLAN")
-        if not self.artifacts and not self.analysis:
-            status("ERROR", "No artifacts or description analyzed yet. Run option 1-3 first.")
+        if not self.artifacts and not self.analysis and not self.url_artifact:
+            status("ERROR", "No artifacts, description, or CTF URL analyzed yet. Run option 1-4 first.")
             return
 
         step_num = 1
@@ -1135,8 +1378,22 @@ class LabCTFEngine:
                 print(f"  - {a.path} ({a.file_type or a.extension}, {a.size} bytes, sha256={a.sha256[:16]}...)")
         else:
             print("  - No files analyzed yet.")
+        if self.url_artifact:
+            print(f"  - URL: {self.url_artifact.final_url or self.url_artifact.original_url} (status {self.url_artifact.status_code})")
+            print(f"  - Links: {len(self.url_artifact.links)} | Forms: {len(self.url_artifact.forms)} | Comments: {len(self.url_artifact.comments)}")
         print()
         step_num += 1
+
+        if self.url_artifact:
+            print(f"STEP {step_num} — Review application response and discovered resources")
+            print("Evidence:")
+            print(f"  - {len(self.url_artifact.links)} same-origin link(s) and {len(self.url_artifact.forms)} form(s) were collected without submission.")
+            if self.url_artifact.comments:
+                print(f"  - {len(self.url_artifact.comments)} HTML comment clue(s) were collected.")
+            print("Objective:")
+            print("  - Understand the challenge structure and inspect evidence-backed resources manually within the CTF/LAB environment.")
+            print()
+            step_num += 1
 
         print(f"STEP {step_num} — Inspect metadata")
         print("Reason:")
@@ -1167,6 +1424,10 @@ class LabCTFEngine:
         lines = []
         lines.append(f"Artifacts analyzed: {len(self.artifacts)}")
         lines.append(f"Detected category (from description): {self.analysis.category_guess if self.analysis else 'N/A'}")
+        if self.url_artifact:
+            lines.append(f"CTF URL: {self.url_artifact.final_url or self.url_artifact.original_url}")
+            lines.append(f"HTTP status: {self.url_artifact.status_code}")
+            lines.append(f"Links: {len(self.url_artifact.links)} | Forms: {len(self.url_artifact.forms)} | Comments: {len(self.url_artifact.comments)}")
         lines.append("")
         lines.append("Strongest clues:")
         if self.analysis and self.analysis.clues:
@@ -1180,17 +1441,28 @@ class LabCTFEngine:
             lines.append(f"  - {a.path}: type={a.file_type or a.extension}, archive={a.is_archive}, image={a.is_image}, text={a.is_text}")
         if not self.artifacts:
             lines.append("  - No files analyzed.")
+        if self.url_artifact:
+            lines.append(f"  - URL response: {self.url_artifact.final_url or self.url_artifact.original_url} [{self.url_artifact.status_code}]")
+            if self.url_artifact.observations:
+                for item in self.url_artifact.observations:
+                    lines.append(f"  - {item}")
         lines.append("")
         lines.append("Remaining unknowns:")
         lines.append("  - No flag has been located or fabricated.")
         lines.append("  - Deeper structural analysis (disassembly, packet reconstruction, decryption) is not automated by NEXUS.")
         lines.append("")
         lines.append("Recommended next actions:")
+        if self.url_artifact:
+            lines.append("  - Review discovered same-origin links and standard CTF resources that were actually available.")
+            if self.url_artifact.forms:
+                lines.append("  - Inspect form behavior manually; forms were not submitted by NEXUS.")
+            if self.url_artifact.comments:
+                lines.append("  - Review collected HTML comments as challenge clues.")
         if self.analysis:
             for s in self.analysis.recommended_steps:
                 lines.append(f"  - {s}")
-        else:
-            lines.append("  - Provide a description or artifact for more specific guidance.")
+        elif not self.url_artifact:
+            lines.append("  - Provide a description, URL, or artifact for more specific guidance.")
         out = "\n".join(lines)
         print(out)
         return out
@@ -1233,6 +1505,61 @@ class LabCTFEngine:
         else:
             lines.append("No description analyzed.")
         lines.append("")
+        if self.url_artifact:
+            u = self.url_artifact
+            lines.append("## CTF URL Analysis")
+            lines.append(f"- Original URL: {u.original_url}")
+            lines.append(f"- Final URL: {u.final_url or 'N/A'}")
+            lines.append(f"- Hostname: {u.hostname}")
+            lines.append(f"- HTTP Status: {u.status_code}")
+            lines.append(f"- Page Title: {u.title or 'N/A'}")
+            lines.append(f"- Response Size: {u.response_size} bytes")
+            lines.append("")
+            lines.append("### Response Headers Summary")
+            if u.headers:
+                for k, v in list(u.headers.items())[:50]:
+                    lines.append(f"- {k}: {v}")
+            else:
+                lines.append("No headers collected.")
+            lines.append("")
+            lines.append("### Discovered Links")
+            if u.links:
+                for link in u.links:
+                    lines.append(f"- {link}")
+            else:
+                lines.append("None.")
+            lines.append("")
+            lines.append("### Forms")
+            if u.forms:
+                for i, form in enumerate(u.forms, 1):
+                    lines.append(f"#### Form {i}")
+                    lines.append(f"- Method: {form['method']}")
+                    lines.append(f"- Action: {form['action'] or '(same page)'}")
+                    lines.append("- Inputs: " + (", ".join(f"{x['name'] or '(unnamed)'} [{x['type']}]" for x in form['inputs']) or "none detected"))
+            else:
+                lines.append("None.")
+            lines.append("")
+            lines.append("### HTML Comments / Clues")
+            if u.comments:
+                for c in u.comments:
+                    lines.append(f"- {c[:500]}")
+            else:
+                lines.append("None.")
+            lines.append("")
+            lines.append("### Cookies Observed")
+            lines.extend([f"- {c}" for c in u.cookies] or ["None."])
+            lines.append("")
+            lines.append("### Observations")
+            lines.extend([f"- {o}" for o in u.observations] or ["None."])
+            lines.append("")
+            lines.append("### Errors")
+            lines.extend([f"- {e}" for e in u.errors] or ["None."])
+            lines.append("")
+            lines.append("### Recommended Next Actions")
+            lines.append("- Review collected links, forms, comments, and available challenge resources manually within the authorized CTF/LAB environment.")
+            lines.append("- Do not treat observations as a solved challenge or vulnerability without evidence.")
+            lines.append("")
+
         lines.append("## AI Overview")
         lines.append("```")
         lines.append(overview)
@@ -1373,9 +1700,10 @@ def lab_ctf_menu(lab: LabCTFEngine):
             "  [1]  ANALYZE FILE",
             "  [2]  ANALYZE FOLDER",
             "  [3]  ANALYZE TEXT / DESCRIPTION",
-            "  [4]  ANALYSIS PLAN",
-            "  [5]  AI OVERVIEW",
-            "  [6]  GENERATE REPORT",
+            "  [4]  ANALYZE CTF URL",
+            "  [5]  ANALYSIS PLAN",
+            "  [6]  AI OVERVIEW",
+            "  [7]  GENERATE REPORT",
             "",
             "  [B]  BACK",
             "",
@@ -1403,10 +1731,15 @@ def lab_ctf_menu(lab: LabCTFEngine):
                 lab.analyze_text(t)
             pause()
         elif choice == "4":
-            lab.analysis_plan(); pause()
+            u = prompt("CTF / LAB URL:")
+            if u and u != "__INTERRUPT__":
+                lab.analyze_ctf_url(u)
+            pause()
         elif choice == "5":
-            lab.ai_overview(); pause()
+            lab.analysis_plan(); pause()
         elif choice == "6":
+            lab.ai_overview(); pause()
+        elif choice == "7":
             lab.generate_report(); pause()
         elif choice == "b":
             return
